@@ -1,0 +1,132 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: llamaudit-db
+    environment:
+      POSTGRES_DB: ${DATABASE_NAME:-llamaudit}
+      POSTGRES_USER: ${DATABASE_USER:-llamaudit}
+      POSTGRES_PASSWORD: ${DATABASE_PASSWORD:-llamaudit_secret}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DATABASE_USER:-llamaudit} -d ${DATABASE_NAME:-llamaudit}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - llamaudit-network
+    profiles:
+      - dev
+      - prod
+
+  # Development services with hot reload
+  backend-dev:
+    image: node:20-alpine
+    container_name: llamaudit-backend-dev
+    working_dir: /app
+    command: sh -c "npm install && npm run dev"
+    ports:
+      - "52001:52001"
+    environment:
+      NODE_ENV: development
+      BACKEND_PORT: 52001
+      DATABASE_HOST: db
+      DATABASE_PORT: 5432
+      DATABASE_NAME: ${DATABASE_NAME:-llamaudit}
+      DATABASE_USER: ${DATABASE_USER:-llamaudit}
+      DATABASE_PASSWORD: ${DATABASE_PASSWORD:-llamaudit_secret}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:52000}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      OPENROUTER_API_URL: ${OPENROUTER_API_URL:-https://openrouter.ai/api/v1}
+      OPENROUTER_CHAT_MODELS: ${OPENROUTER_CHAT_MODELS:-qwen/qwen3-8b}
+      OLLAMA_ENDPOINT: ${OLLAMA_ENDPOINT:-http://host.docker.internal:11434}
+      OLLAMA_MODELS: ${OLLAMA_MODELS:-}
+      FRONTEND_URL: ${FRONTEND_URL:-http://localhost:52000}
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+      - backend_node_modules:/app/node_modules
+    networks:
+      - llamaudit-network
+    profiles:
+      - dev
+
+  frontend-dev:
+    image: node:20-alpine
+    container_name: llamaudit-frontend-dev
+    working_dir: /app
+    command: sh -c "npm install && npm run dev"
+    ports:
+      - "52000:52000"
+    environment:
+      BACKEND_HOST: backend-dev
+      BACKEND_PORT: 52001
+    depends_on:
+      - backend-dev
+    volumes:
+      - ./frontend:/app
+      - frontend_node_modules:/app/node_modules
+    networks:
+      - llamaudit-network
+    profiles:
+      - dev
+
+  # Ephemeral test containers
+  test-db:
+    image: postgres:16-alpine
+    container_name: llamaudit-test-db
+    environment:
+      POSTGRES_DB: llamaudit_test
+      POSTGRES_USER: llamaudit_test
+      POSTGRES_PASSWORD: llamaudit_test_secret
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U llamaudit_test -d llamaudit_test"]
+      interval: 2s
+      timeout: 2s
+      retries: 10
+    networks:
+      - llamaudit-network
+    profiles:
+      - test
+
+  test-runner:
+    image: node:20-alpine
+    container_name: llamaudit-test-runner
+    working_dir: /app
+    environment:
+      NODE_ENV: test
+      DATABASE_HOST: test-db
+      DATABASE_PORT: 5432
+      DATABASE_NAME: llamaudit_test
+      DATABASE_USER: llamaudit_test
+      DATABASE_PASSWORD: llamaudit_test_secret
+      OPENROUTER_API_KEY: test-key
+      OPENROUTER_API_URL: https://openrouter.ai/api/v1
+      OPENROUTER_CHAT_MODELS: test-model
+    depends_on:
+      test-db:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app/backend
+      - ./frontend:/app/frontend
+      - test_backend_modules:/app/backend/node_modules
+      - test_frontend_modules:/app/frontend/node_modules
+    networks:
+      - llamaudit-network
+    profiles:
+      - test
+
+volumes:
+  postgres_data:
+  backend_node_modules:
+  frontend_node_modules:
+  test_backend_modules:
+  test_frontend_modules:
+
+networks:
+  llamaudit-network:
+    driver: bridge
